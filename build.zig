@@ -38,7 +38,7 @@ pub fn build(b: *std.build.Builder) void {
     lib.addIncludePath("hidapi");
     lib.linkLibC();
 
-    lib.install();
+    b.installArtifact(lib);
     lib.installHeadersDirectoryOptions(.{
         .source_dir = "hidapi",
         .install_dir = .header,
