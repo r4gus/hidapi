@@ -32,15 +32,15 @@ pub fn build(b: *std.build.Builder) void {
     } else if (lib.target.isWindows()) {
         lib.addCSourceFiles(&.{"windows/hid.c"}, &.{"-std=gnu11"});
         lib.addCSourceFiles(&.{"windows/hidapi_descriptor_reconstruct.c"}, &.{"-std=gnu11"});
-        lib.addIncludePath("windows");
+        lib.addIncludePath(std.build.LazyPath{ .path = "windows" });
     }
 
-    lib.addIncludePath("hidapi");
+    lib.addIncludePath(std.build.LazyPath{ .path = "hidapi" });
     lib.linkLibC();
 
     b.installArtifact(lib);
     lib.installHeadersDirectoryOptions(.{
-        .source_dir = "hidapi",
+        .source_dir = std.Build.LazyPath{ .path = "hidapi" },
         .install_dir = .header,
         .install_subdir = "hidapi",
         .exclude_extensions = &.{".c"},
