@@ -40,14 +40,15 @@ pub fn build(b: *std.Build) void {
 
     lib.addIncludePath(std.Build.LazyPath{ .path = "hidapi" });
     lib.linkLibC();
+    lib.installHeader(std.Build.LazyPath{ .path = "hidapi/hidapi.h" }, "hidapi.h");
 
-    lib.installHeadersDirectory(
-        std.Build.LazyPath{ .path = "hidapi" },
-        "hidapi",
-        .{
-            .exclude_extensions = &.{},
-            .include_extensions = &.{".h"},
-        },
-    );
+    //lib.installHeadersDirectory(
+    //    std.Build.LazyPath{ .path = "hidapi" },
+    //    "hidapi",
+    //    .{
+    //        .exclude_extensions = &.{},
+    //        .include_extensions = &.{".h"},
+    //    },
+    //);
     b.installArtifact(lib);
 }
