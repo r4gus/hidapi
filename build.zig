@@ -38,9 +38,9 @@ pub fn build(b: *std.Build) void {
         lib.addIncludePath(std.Build.LazyPath{ .path = "windows" });
     }
 
-    lib.addIncludePath(std.Build.LazyPath{ .path = "hidapi" });
+    lib.addIncludePath(b.path("hidapi"));
     lib.linkLibC();
-    lib.installHeader(std.Build.LazyPath{ .path = "hidapi/hidapi.h" }, "hidapi.h");
+    lib.installHeader(b.path("hidapi/hidapi.h"), "hidapi.h");
 
     //lib.installHeadersDirectory(
     //    std.Build.LazyPath{ .path = "hidapi" },
