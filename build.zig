@@ -35,7 +35,7 @@ pub fn build(b: *std.Build) void {
     } else if (target.result.os.tag == .windows) {
         lib.addCSourceFiles(.{ .files = &.{"windows/hid.c"}, .flags = &.{"-std=gnu11"} });
         lib.addCSourceFiles(.{ .files = &.{"windows/hidapi_descriptor_reconstruct.c"}, .flags = &.{"-std=gnu11"} });
-        lib.addIncludePath(std.Build.LazyPath{ .path = "windows" });
+        lib.addIncludePath(b.path("windows"));
     }
 
     lib.addIncludePath(b.path("hidapi"));
