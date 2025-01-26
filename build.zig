@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag == .linux) {
         if (use_hidraw_backend) {
             lib.addCSourceFiles(.{ .files = &.{"linux/hid.c"}, .flags = &.{"-std=gnu11"} });
-            lib.linkSystemLibrary("libudev");
+            lib.linkSystemLibrary("udev");
         } else { // libusb backend
             lib.addCSourceFiles(.{ .files = &.{"libusb/hid.c"}, .flags = &.{"-std=gnu11"} });
             lib.linkSystemLibrary("libusb");
