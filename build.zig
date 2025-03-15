@@ -6,49 +6,47 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib = b.addStaticLibrary(.{
-        .name = "hidapi",
+    const lib_mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
     });
 
     if (target.result.os.tag == .linux) {
         if (use_hidraw_backend) {
-            lib.addCSourceFiles(.{ .files = &.{"linux/hid.c"}, .flags = &.{"-std=gnu11"} });
-            lib.linkSystemLibrary("udev");
+            lib_mod.addCSourceFiles(.{ .files = &.{"linux/hid.c"}, .flags = &.{"-std=gnu11"} });
+            lib_mod.linkSystemLibrary("udev", .{});
         } else { // libusb backend
-            lib.addCSourceFiles(.{ .files = &.{"libusb/hid.c"}, .flags = &.{"-std=gnu11"} });
-            lib.linkSystemLibrary("libusb");
+            lib_mod.addCSourceFiles(.{ .files = &.{"libusb/hid.c"}, .flags = &.{"-std=gnu11"} });
+            lib_mod.linkSystemLibrary("libusb", .{});
         }
-        lib.linkSystemLibrary("pthread");
+        lib_mod.linkSystemLibrary("pthread", .{});
     } else if (target.result.os.tag == .freebsd) {
-        lib.addCSourceFiles(.{ .files = &.{"linux/hid.c"}, .flags = &.{"-std=gnu11"} });
-        lib.linkSystemLibrary("libusb");
-        lib.linkSystemLibrary("libiconv");
-        lib.linkSystemLibrary("pthread");
+        lib_mod.addCSourceFiles(.{ .files = &.{"linux/hid.c"}, .flags = &.{"-std=gnu11"} });
+        lib_mod.linkSystemLibrary("libusb", .{});
+        lib_mod.linkSystemLibrary("libiconv", .{});
+        lib_mod.linkSystemLibrary("pthread", .{});
     } else if (target.result.os.tag == .macos) {
-        lib.addCSourceFiles(.{ .files = &.{"mac/hid.c"}, .flags = &.{"-std=gnu11"} });
-        lib.linkSystemLibrary("IOKit");
-        lib.linkSystemLibrary("CoreFoundation");
-        lib.linkSystemLibrary("AppKit");
-        lib.linkSystemLibrary("pthread");
+        lib_mod.addCSourceFiles(.{ .files = &.{"mac/hid.c"}, .flags = &.{"-std=gnu11"} });
+        lib_mod.linkSystemLibrary("IOKit", .{});
+        lib_mod.linkSystemLibrary("CoreFoundation", .{});
+        lib_mod.linkSystemLibrary("AppKit", .{});
+        lib_mod.linkSystemLibrary("pthread", .{});
     } else if (target.result.os.tag == .windows) {
-        lib.addCSourceFiles(.{ .files = &.{"windows/hid.c"}, .flags = &.{"-std=gnu11"} });
-        lib.addCSourceFiles(.{ .files = &.{"windows/hidapi_descriptor_reconstruct.c"}, .flags = &.{"-std=gnu11"} });
-        lib.addIncludePath(b.path("windows"));
+        lib_mod.addCSourceFiles(.{ .files = &.{"windows/hid.c"}, .flags = &.{"-std=gnu11"} });
+        lib_mod.addCSourceFiles(.{ .files = &.{"windows/hidapi_descriptor_reconstruct.c"}, .flags = &.{"-std=gnu11"} });
+        lib_mod.addIncludePath(b.path("windows"));
     }
 
-    lib.addIncludePath(b.path("hidapi"));
+    lib_mod.addIncludePath(b.path("hidapi"));
+
+    const lib = b.addLibrary(.{
+        .linkage = .static,
+        .name = "hidapi",
+        .root_module = lib_mod,
+    });
+
     lib.linkLibC();
     lib.installHeader(b.path("hidapi/hidapi.h"), "hidapi.h");
 
-    //lib.installHeadersDirectory(
-    //    std.Build.LazyPath{ .path = "hidapi" },
-    //    "hidapi",
-    //    .{
-    //        .exclude_extensions = &.{},
-    //        .include_extensions = &.{".h"},
-    //    },
-    //);
     b.installArtifact(lib);
 }

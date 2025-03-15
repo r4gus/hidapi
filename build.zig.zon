@@ -1,6 +1,7 @@
 .{
-    .name = "hidapi",
-    .version = "0.14.0",
+    .name = .hidapi,
+    .version = "0.15.0",
+    .fingerprint = 0x274758e14a01bde3,
     .dependencies = .{
     },
     .paths = .{
