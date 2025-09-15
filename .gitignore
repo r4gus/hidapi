@@ -31,3 +31,6 @@ CMakeLists.txt.user
 # Zig
 zig-cache
 zig-out
+
+# doxgen output
+doxygen/html/

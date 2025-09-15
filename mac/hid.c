@@ -28,6 +28,7 @@
 #include <IOKit/usb/USBSpec.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach/mach_error.h>
+#include <stdbool.h>
 #include <wchar.h>
 #include <locale.h>
 #include <pthread.h>
@@ -36,9 +37,6 @@
 #include <dlfcn.h>
 
 #include "hidapi_darwin.h"
-
-/* As defined in AppKit.h, but we don't need the entire AppKit for a single constant. */
-extern const double NSAppKitVersionNumber;
 
 /* Barrier implementation because Mac OSX doesn't have pthread_barrier.
    It also doesn't have clock_gettime(). So much for POSIX and SUSv2.
@@ -56,15 +54,15 @@ static int pthread_barrier_init(pthread_barrier_t *barrier, const pthread_barrie
 {
 	(void) attr;
 
-	if(count == 0) {
+	if (count == 0) {
 		errno = EINVAL;
 		return -1;
 	}
 
-	if(pthread_mutex_init(&barrier->mutex, 0) < 0) {
+	if (pthread_mutex_init(&barrier->mutex, 0) < 0) {
 		return -1;
 	}
-	if(pthread_cond_init(&barrier->cond, 0) < 0) {
+	if (pthread_cond_init(&barrier->cond, 0) < 0) {
 		pthread_mutex_destroy(&barrier->mutex);
 		return -1;
 	}
@@ -85,16 +83,18 @@ static int pthread_barrier_wait(pthread_barrier_t *barrier)
 {
 	pthread_mutex_lock(&barrier->mutex);
 	++(barrier->count);
-	if(barrier->count >= barrier->trip_count)
-	{
+	if (barrier->count >= barrier->trip_count) {
 		barrier->count = 0;
-		pthread_cond_broadcast(&barrier->cond);
 		pthread_mutex_unlock(&barrier->mutex);
+		pthread_cond_broadcast(&barrier->cond);
 		return 1;
 	}
-	else
-	{
-		pthread_cond_wait(&barrier->cond, &(barrier->mutex));
+	else {
+		do {
+			pthread_cond_wait(&barrier->cond, &(barrier->mutex));
+		}
+		while (barrier->count != 0);
+
 		pthread_mutex_unlock(&barrier->mutex);
 		return 0;
 	}
@@ -142,6 +142,7 @@ struct hid_device_ {
 	pthread_barrier_t shutdown_barrier; /* Ensures correct shutdown sequence */
 	int shutdown_thread;
 	wchar_t *last_error_str;
+	wchar_t *last_read_error_str;
 };
 
 static hid_device *new_hid_device(void)
@@ -163,6 +164,7 @@ static hid_device *new_hid_device(void)
 	dev->device_info = NULL;
 	dev->shutdown_thread = 0;
 	dev->last_error_str = NULL;
+	dev->last_read_error_str = NULL;
 
 	/* Thread objects */
 	pthread_mutex_init(&dev->mutex, NULL);
@@ -195,6 +197,8 @@ static void free_hid_device(hid_device *dev)
 	if (dev->source)
 		CFRelease(dev->source);
 	free(dev->input_report_buf);
+	free(dev->last_error_str);
+	free(dev->last_read_error_str);
 	hid_free_enumeration(dev->device_info);
 
 	/* Clean up the thread objects */
@@ -302,7 +306,7 @@ static CFArrayRef get_array_property(IOHIDDeviceRef device, CFStringRef key)
 static int32_t get_int_property(IOHIDDeviceRef device, CFStringRef key)
 {
 	CFTypeRef ref;
-	int32_t value;
+	int32_t value = 0;
 
 	ref = IOHIDDeviceGetProperty(device, key);
 	if (ref) {
@@ -312,6 +316,36 @@ static int32_t get_int_property(IOHIDDeviceRef device, CFStringRef key)
 		}
 	}
 	return 0;
+}
+
+static bool try_get_int_property(IOHIDDeviceRef device, CFStringRef key, int32_t *out_val)
+{
+	bool result = false;
+	CFTypeRef ref;
+
+	ref = IOHIDDeviceGetProperty(device, key);
+	if (ref) {
+		if (CFGetTypeID(ref) == CFNumberGetTypeID()) {
+			result = CFNumberGetValue((CFNumberRef) ref, kCFNumberSInt32Type, out_val);
+		}
+	}
+	return result;
+}
+
+static bool try_get_ioregistry_int_property(io_service_t service, CFStringRef property, int32_t *out_val)
+{
+	bool result = false;
+	CFTypeRef ref = IORegistryEntryCreateCFProperty(service, property, kCFAllocatorDefault, 0);
+
+	if (ref) {
+		if (CFGetTypeID(ref) == CFNumberGetTypeID()) {
+			result = CFNumberGetValue(ref, kCFNumberSInt32Type, out_val);
+		}
+
+		CFRelease(ref);
+	}
+
+	return result;
 }
 
 static CFArrayRef get_usage_pairs(IOHIDDeviceRef device)
@@ -345,7 +379,7 @@ static int get_string_property(IOHIDDeviceRef device, CFStringRef prop, wchar_t 
 
 	buf[0] = 0;
 
-	if (str) {
+	if (str && CFGetTypeID(str) == CFStringGetTypeID()) {
 		CFIndex str_len = CFStringGetLength(str);
 		CFRange range;
 		CFIndex used_buf_len;
@@ -417,12 +451,12 @@ static int init_hid_manager(void)
 	return -1;
 }
 
-HID_API_EXPORT const struct hid_api_version* HID_API_CALL hid_version()
+HID_API_EXPORT const struct hid_api_version* HID_API_CALL hid_version(void)
 {
 	return &api_version;
 }
 
-HID_API_EXPORT const char* HID_API_CALL hid_version_str()
+HID_API_EXPORT const char* HID_API_CALL hid_version_str(void)
 {
 	return HID_API_VERSION_STR;
 }
@@ -435,7 +469,7 @@ int HID_API_EXPORT hid_init(void)
 	register_global_error(NULL);
 
 	if (!hid_mgr) {
-		is_macos_10_10_or_greater = (NSAppKitVersionNumber >= 1343); /* NSAppKitVersionNumber10_10 */
+		is_macos_10_10_or_greater = (kCFCoreFoundationVersionNumber >= 1151.16); /* kCFCoreFoundationVersionNumber10_10 */
 		hid_darwin_set_open_exclusive(1); /* Backward compatibility */
 		return init_hid_manager();
 	}
@@ -466,6 +500,46 @@ static void process_pending_events(void) {
 	} while(res != kCFRunLoopRunFinished && res != kCFRunLoopRunTimedOut);
 }
 
+static int read_usb_interface_from_hid_service_parent(io_service_t hid_service)
+{
+	int32_t result = -1;
+	bool success = false;
+	io_registry_entry_t current = IO_OBJECT_NULL;
+	kern_return_t res;
+	int parent_number = 0;
+
+	res = IORegistryEntryGetParentEntry(hid_service, kIOServicePlane, &current);
+	while (KERN_SUCCESS == res
+			/* Only search up to 3 parent entries.
+			 * With the default driver - the parent-of-interest supposed to be the first one,
+			 * but lets assume some custom drivers or so, with deeper tree. */
+			&& parent_number < 3) {
+		io_registry_entry_t parent = IO_OBJECT_NULL;
+		int32_t interface_number = -1;
+		parent_number++;
+
+		success = try_get_ioregistry_int_property(current, CFSTR(kUSBInterfaceNumber), &interface_number);
+		if (success) {
+			result = interface_number;
+			break;
+		}
+
+		res = IORegistryEntryGetParentEntry(current, kIOServicePlane, &parent);
+		if (parent) {
+			IOObjectRelease(current);
+			current = parent;
+		}
+
+	}
+
+	if (current) {
+		IOObjectRelease(current);
+		current = IO_OBJECT_NULL;
+	}
+
+	return result;
+}
+
 static struct hid_device_info *create_device_info_with_usage(IOHIDDeviceRef dev, int32_t usage_page, int32_t usage)
 {
 	unsigned short dev_vid;
@@ -475,7 +549,7 @@ static struct hid_device_info *create_device_info_with_usage(IOHIDDeviceRef dev,
 	CFTypeRef transport_prop;
 
 	struct hid_device_info *cur_dev;
-	io_object_t iokit_dev;
+	io_service_t hid_service;
 	kern_return_t res;
 	uint64_t entry_id = 0;
 
@@ -499,9 +573,9 @@ static struct hid_device_info *create_device_info_with_usage(IOHIDDeviceRef dev,
 
 	/* Fill in the path (as a unique ID of the service entry) */
 	cur_dev->path = NULL;
-	iokit_dev = IOHIDDeviceGetService(dev);
-	if (iokit_dev != MACH_PORT_NULL) {
-		res = IORegistryEntryGetRegistryEntryID(iokit_dev, &entry_id);
+	hid_service = IOHIDDeviceGetService(dev);
+	if (hid_service != MACH_PORT_NULL) {
+		res = IORegistryEntryGetRegistryEntryID(hid_service, &entry_id);
 	}
 	else {
 		res = KERN_INVALID_ARGUMENT;
@@ -540,24 +614,32 @@ static struct hid_device_info *create_device_info_with_usage(IOHIDDeviceRef dev,
 	/* Release Number */
 	cur_dev->release_number = get_int_property(dev, CFSTR(kIOHIDVersionNumberKey));
 
-	/* Interface Number */
-	/* We can only retrieve the interface number for USB HID devices.
-	 * IOKit always seems to return 0 when querying a standard USB device
-	 * for its interface. */
-	int is_usb_hid = get_int_property(dev, CFSTR(kUSBInterfaceClass)) == kUSBHIDClass;
-	if (is_usb_hid) {
-		/* Get the interface number */
-		cur_dev->interface_number = get_int_property(dev, CFSTR(kUSBInterfaceNumber));
-	} else {
-		cur_dev->interface_number = -1;
-	}
+	/* Interface Number.
+	 * We can only retrieve the interface number for USB HID devices.
+	 * See below */
+	cur_dev->interface_number = -1;
 
 	/* Bus Type */
 	transport_prop = IOHIDDeviceGetProperty(dev, CFSTR(kIOHIDTransportKey));
 
 	if (transport_prop != NULL && CFGetTypeID(transport_prop) == CFStringGetTypeID()) {
 		if (CFStringCompare((CFStringRef)transport_prop, CFSTR(kIOHIDTransportUSBValue), 0) == kCFCompareEqualTo) {
+			int32_t interface_number = -1;
 			cur_dev->bus_type = HID_API_BUS_USB;
+
+			/* A IOHIDDeviceRef used to have this simple property,
+			 * until macOS 13.3 - we will try to use it. */
+			if (try_get_int_property(dev, CFSTR(kUSBInterfaceNumber), &interface_number)) {
+				cur_dev->interface_number = interface_number;
+			} else {
+				/* Otherwise fallback to io_service_t property.
+				 * (of one of the parent services). */
+				cur_dev->interface_number = read_usb_interface_from_hid_service_parent(hid_service);
+
+				/* If the above doesn't work -
+				 * no (known) fallback exists at this point. */
+			}
+
 		/* Match "Bluetooth", "BluetoothLowEnergy" and "Bluetooth Low Energy" strings */
 		} else if (CFStringHasPrefix((CFStringRef)transport_prop, CFSTR(kIOHIDTransportBluetoothValue))) {
 			cur_dev->bus_type = HID_API_BUS_BLUETOOTH;
@@ -690,7 +772,7 @@ struct hid_device_info  HID_API_EXPORT *hid_enumerate(unsigned short vendor_id, 
 		}
 		cur_dev = tmp;
 
-		/* move the pointer to the tail of returnd list */
+		/* move the pointer to the tail of returned list */
 		while (cur_dev->next != NULL) {
 			cur_dev = cur_dev->next;
 		}
@@ -877,7 +959,7 @@ static void *read_thread(void *param)
 	while (!dev->shutdown_thread && !dev->disconnected) {
 		code = CFRunLoopRunInMode(dev->run_loop_mode, 1000/*sec*/, FALSE);
 		/* Return if the device has been disconnected */
-		if (code == kCFRunLoopRunFinished) {
+		if (code == kCFRunLoopRunFinished || code == kCFRunLoopRunStopped) {
 			dev->disconnected = 1;
 			break;
 		}
@@ -947,7 +1029,7 @@ hid_device * HID_API_EXPORT hid_open_path(const char *path)
 
 	/* Set up the HID Manager if it hasn't been done */
 	if (hid_init() < 0) {
-		goto return_error;
+		return NULL;
 	}
 	/* register_global_error: global error is set/reset by hid_init */
 
@@ -1023,12 +1105,12 @@ static int set_report(hid_device *dev, IOHIDReportType type, const unsigned char
 	IOReturn res;
 	unsigned char report_id;
 
-	register_device_error(dev, NULL);
-
 	if (!data || (length == 0)) {
-		register_device_error(dev, strerror(EINVAL));
+		register_device_error(dev, "Zero buffer/length");
 		return -1;
 	}
+
+	register_device_error(dev, NULL);
 
 	report_id = data[0];
 
@@ -1063,9 +1145,16 @@ static int get_report(hid_device *dev, IOHIDReportType type, unsigned char *data
 	unsigned char *report = data;
 	CFIndex report_length = length;
 	IOReturn res = kIOReturnSuccess;
-	const unsigned char report_id = data[0];
+	unsigned char report_id;
+
+	if (!data || (length == 0)) {
+		register_device_error(dev, "Zero buffer/length");
+		return -1;
+	}
 
 	register_device_error(dev, NULL);
+
+	report_id = data[0];
 
 	if (report_id == 0x0) {
 		/* Not using numbered Reports.
@@ -1109,7 +1198,9 @@ static int return_data(hid_device *dev, unsigned char *data, size_t length)
 	   return buffer (data), and delete the liked list item. */
 	struct input_report *rpt = dev->input_reports;
 	size_t len = (length < rpt->len)? length: rpt->len;
-	memcpy(data, rpt->data, len);
+	if (data != NULL) {
+		memcpy(data, rpt->data, len);
+	}
 	dev->input_reports = rpt->next;
 	free(rpt->data);
 	free(rpt);
@@ -1156,12 +1247,18 @@ static int cond_timedwait(hid_device *dev, pthread_cond_t *cond, pthread_mutex_t
 	}
 
 	return 0;
-
 }
 
 int HID_API_EXPORT hid_read_timeout(hid_device *dev, unsigned char *data, size_t length, int milliseconds)
 {
 	int bytes_read = -1;
+
+	if (!data || (length == 0)) {
+		register_error_str(&dev->last_read_error_str, "Zero buffer/length");
+		return -1;
+	}
+
+	register_error_str(&dev->last_read_error_str, NULL);
 
 	/* Lock the access to the report list. */
 	pthread_mutex_lock(&dev->mutex);
@@ -1176,7 +1273,7 @@ int HID_API_EXPORT hid_read_timeout(hid_device *dev, unsigned char *data, size_t
 	/* Return if the device has been disconnected. */
 	if (dev->disconnected) {
 		bytes_read = -1;
-		register_device_error(dev, "hid_read_timeout: device disconnected");
+		register_error_str(&dev->last_read_error_str, "hid_read_timeout: device disconnected");
 		goto ret;
 	}
 
@@ -1185,7 +1282,7 @@ int HID_API_EXPORT hid_read_timeout(hid_device *dev, unsigned char *data, size_t
 		   has been an error. An error code of -1 should
 		   be returned. */
 		bytes_read = -1;
-		register_device_error(dev, "hid_read_timeout: thread shutdown");
+		register_error_str(&dev->last_read_error_str, "hid_read_timeout: thread shutdown");
 		goto ret;
 	}
 
@@ -1199,7 +1296,7 @@ int HID_API_EXPORT hid_read_timeout(hid_device *dev, unsigned char *data, size_t
 			bytes_read = return_data(dev, data, length);
 		else {
 			/* There was an error, or a device disconnection. */
-			register_device_error(dev, "hid_read_timeout: error waiting for more data");
+			register_error_str(&dev->last_read_error_str, "hid_read_timeout: error waiting for more data");
 			bytes_read = -1;
 		}
 	}
@@ -1223,7 +1320,7 @@ int HID_API_EXPORT hid_read_timeout(hid_device *dev, unsigned char *data, size_t
 		} else if (res == ETIMEDOUT) {
 			bytes_read = 0;
 		} else {
-			register_device_error(dev, "hid_read_timeout:  error waiting for more data");
+			register_error_str(&dev->last_read_error_str, "hid_read_timeout: error waiting for more data");
 			bytes_read = -1;
 		}
 	}
@@ -1243,6 +1340,13 @@ int HID_API_EXPORT hid_read(hid_device *dev, unsigned char *data, size_t length)
 	return hid_read_timeout(dev, data, length, (dev->blocking)? -1: 0);
 }
 
+HID_API_EXPORT const wchar_t * HID_API_CALL hid_read_error(hid_device *dev)
+{
+	if (dev->last_read_error_str == NULL)
+		return L"Success";
+	return dev->last_read_error_str;
+}
+
 int HID_API_EXPORT hid_set_nonblocking(hid_device *dev, int nonblock)
 {
 	/* All Nonblocking operation is handled by the library. */
@@ -1259,6 +1363,11 @@ int HID_API_EXPORT hid_send_feature_report(hid_device *dev, const unsigned char 
 int HID_API_EXPORT hid_get_feature_report(hid_device *dev, unsigned char *data, size_t length)
 {
 	return get_report(dev, kIOHIDReportTypeFeature, data, length);
+}
+
+int HID_API_EXPORT hid_send_output_report(hid_device *dev, const unsigned char *data, size_t length)
+{
+	return set_report(dev, kIOHIDReportTypeOutput, data, length);
 }
 
 int HID_API_EXPORT HID_API_CALL hid_get_input_report(hid_device *dev, unsigned char *data, size_t length)
@@ -1380,7 +1489,10 @@ int HID_API_EXPORT_CALL hid_get_serial_number_string(hid_device *dev, wchar_t *s
 }
 
 HID_API_EXPORT struct hid_device_info *HID_API_CALL hid_get_device_info(hid_device *dev) {
-	if (!dev->device_info) {
+	if (dev->device_info) {
+		register_device_error(dev, NULL);
+	}
+	else {
 		dev->device_info = create_device_info(dev->device_handle);
 		if (!dev->device_info) {
 			register_device_error(dev, "Failed to create hid_device_info");
@@ -1403,6 +1515,13 @@ int HID_API_EXPORT_CALL hid_get_indexed_string(hid_device *dev, int string_index
 
 int HID_API_EXPORT_CALL hid_darwin_get_location_id(hid_device *dev, uint32_t *location_id)
 {
+	if (!location_id) {
+		register_device_error(dev, "Location ID is NULL");
+		return -1;
+	}
+
+	register_device_error(dev, NULL);
+
 	int res = get_int_property(dev->device_handle, CFSTR(kIOHIDLocationIDKey));
 	if (res != 0) {
 		*location_id = (uint32_t) res;
@@ -1425,23 +1544,27 @@ int HID_API_EXPORT_CALL hid_darwin_get_open_exclusive(void)
 
 int HID_API_EXPORT_CALL hid_darwin_is_device_open_exclusive(hid_device *dev)
 {
-	if (!dev)
-		return -1;
-
 	return (dev->open_options == kIOHIDOptionsTypeSeizeDevice) ? 1 : 0;
 }
 
 int HID_API_EXPORT_CALL hid_get_report_descriptor(hid_device *dev, unsigned char *buf, size_t buf_size)
 {
+	if (!buf || !buf_size) {
+		register_device_error(dev, "Zero buffer/length");
+		return -1;
+	}
+
+	register_device_error(dev, NULL);
+
 	CFTypeRef ref = IOHIDDeviceGetProperty(dev->device_handle, CFSTR(kIOHIDReportDescriptorKey));
 	if (ref != NULL && CFGetTypeID(ref) == CFDataGetTypeID()) {
 		CFDataRef report_descriptor = (CFDataRef) ref;
 		const UInt8 *descriptor_buf = CFDataGetBytePtr(report_descriptor);
-		CFIndex descriptor_buf_len = CFDataGetLength(report_descriptor);
+		const CFIndex descriptor_buf_len = CFDataGetLength(report_descriptor);
 		size_t copy_len = (size_t) descriptor_buf_len;
 
 		if (descriptor_buf == NULL || descriptor_buf_len < 0) {
-			register_device_error(dev, "Zero buffer/length");
+			register_device_error(dev, "Zero descriptor from device");
 			return -1;
 		}
 

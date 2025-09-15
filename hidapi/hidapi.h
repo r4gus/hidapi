@@ -52,7 +52,7 @@
 
 	@ingroup API
 */
-#define HID_API_VERSION_MINOR 14
+#define HID_API_VERSION_MINOR 16
 /** @brief Static/compile-time patch version of the library.
 
 	@ingroup API
@@ -70,7 +70,9 @@
 	This macro was added in version 0.12.0.
 
 	Convenient function to be used for compile-time checks, like:
+	@code{.c}
 	#if HID_API_VERSION >= HID_API_MAKE_VERSION(0, 12, 0)
+	@endcode
 
 	@ingroup API
 */
@@ -103,10 +105,11 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+		/** A structure to hold the version numbers. */
 		struct hid_api_version {
-			int major;
-			int minor;
-			int patch;
+			int major; /**< major version number */
+			int minor; /**< minor version number */
+			int patch; /**< patch version number */
 		};
 
 		struct hid_device_;
@@ -117,30 +120,37 @@ extern "C" {
 			@ingroup API
 		*/
 		typedef enum {
-			/* Unknown bus type */
+			/** Unknown bus type */
 			HID_API_BUS_UNKNOWN = 0x00,
 
-			/* USB bus
+			/** USB bus
 			   Specifications:
 			   https://usb.org/hid */
 			HID_API_BUS_USB = 0x01,
 
-			/* Bluetooth or Bluetooth LE bus
+			/** Bluetooth or Bluetooth LE bus
 			   Specifications:
 			   https://www.bluetooth.com/specifications/specs/human-interface-device-profile-1-1-1/
 			   https://www.bluetooth.com/specifications/specs/hid-service-1-0/
 			   https://www.bluetooth.com/specifications/specs/hid-over-gatt-profile-1-0/ */
 			HID_API_BUS_BLUETOOTH = 0x02,
 
-			/* I2C bus
+			/** I2C bus
 			   Specifications:
 			   https://docs.microsoft.com/previous-versions/windows/hardware/design/dn642101(v=vs.85) */
 			HID_API_BUS_I2C = 0x03,
 
-			/* SPI bus
+			/** SPI bus
 			   Specifications:
 			   https://www.microsoft.com/download/details.aspx?id=103325 */
 			HID_API_BUS_SPI = 0x04,
+
+			/** Virtual device
+			    E.g.: https://elixir.bootlin.com/linux/v4.0/source/include/uapi/linux/input.h#L955 
+			    
+			    Since version 0.16.0, @ref HID_API_VERSION >= HID_API_MAKE_VERSION(0, 16, 0)
+			*/
+			HID_API_BUS_VIRTUAL = 0x05,
 		} hid_bus_type;
 
 		/** hidapi info structure */
@@ -304,9 +314,9 @@ extern "C" {
 			single report), followed by the report data (16 bytes). In
 			this example, the length passed in would be 17.
 
-			hid_write() will send the data on the first OUT endpoint, if
-			one exists. If it does not, it will send the data through
-			the Control Endpoint (Endpoint 0).
+			hid_write() will send the data on the first interrupt OUT 
+			endpoint, if one exists. If it does not the behaviour is as 
+			@ref hid_send_output_report
 
 			@ingroup API
 			@param dev A device handle returned from hid_open().
@@ -338,9 +348,11 @@ extern "C" {
 			@returns
 				This function returns the actual number of bytes read and
 				-1 on error.
-				Call hid_error(dev) to get the failure reason.
+				Call hid_read_error(dev) to get the failure reason.
 				If no packet was available to be read within
 				the timeout period, this function returns 0.
+
+			@note This function doesn't change the buffer returned by the hid_error(dev).
 		*/
 		int HID_API_EXPORT HID_API_CALL hid_read_timeout(hid_device *dev, unsigned char *data, size_t length, int milliseconds);
 
@@ -360,11 +372,35 @@ extern "C" {
 			@returns
 				This function returns the actual number of bytes read and
 				-1 on error.
-				Call hid_error(dev) to get the failure reason.
+				Call hid_read_error(dev) to get the failure reason.
 				If no packet was available to be read and
 				the handle is in non-blocking mode, this function returns 0.
+
+			@note This function doesn't change the buffer returned by the hid_error(dev).
 		*/
 		int  HID_API_EXPORT HID_API_CALL hid_read(hid_device *dev, unsigned char *data, size_t length);
+
+		/** @brief Get a string describing the last error which occurred during hid_read/hid_read_timeout.
+
+			Since version 0.15.0, @ref HID_API_VERSION >= HID_API_MAKE_VERSION(0, 15, 0)
+
+			This function is intended for logging/debugging purposes.
+
+			This function guarantees to never return NULL for a valid @ref dev.
+			If there was no error in the last call to hid_read/hid_read_error -
+			the returned string clearly indicates that.
+
+			Strings returned from hid_read_error() must not be freed by the user,
+			i.e. owned by HIDAPI library.
+			Device-specific error string may remain allocated at most until hid_close() is called.
+
+			@ingroup API
+			@param dev A device handle. Shall never be NULL.
+
+			@returns
+				A string describing the hid_read/hid_read_timeout error (if any).
+		*/
+		HID_API_EXPORT const wchar_t* HID_API_CALL hid_read_error(hid_device *dev);
 
 		/** @brief Set the device handle to be non-blocking.
 
@@ -441,6 +477,40 @@ extern "C" {
 				Call hid_error(dev) to get the failure reason.
 		*/
 		int HID_API_EXPORT HID_API_CALL hid_get_feature_report(hid_device *dev, unsigned char *data, size_t length);
+
+		/** @brief Send a Output report to the device.
+
+			Since version 0.15.0, @ref HID_API_VERSION >= HID_API_MAKE_VERSION(0, 15, 0)
+
+			Output reports are sent over the Control endpoint as a
+			Set_Report transfer.  The first byte of @p data[] must
+			contain the Report ID. For devices which only support a
+			single report, this must be set to 0x0. The remaining bytes
+			contain the report data. Since the Report ID is mandatory,
+			calls to hid_send_output_report() will always contain one
+			more byte than the report contains. For example, if a hid
+			report is 16 bytes long, 17 bytes must be passed to
+			hid_send_output_report(): the Report ID (or 0x0, for
+			devices which do not use numbered reports), followed by the
+			report data (16 bytes). In this example, the length passed
+			in would be 17.
+
+			This function sets the return value of hid_error().
+
+			@ingroup API
+			@param dev A device handle returned from hid_open().
+			@param data The data to send, including the report number as
+				the first byte.
+			@param length The length in bytes of the data to send, including
+				the report number.
+
+			@returns
+				This function returns the actual number of bytes written and
+				-1 on error.
+
+			@see @ref hid_write
+		*/
+		int HID_API_EXPORT HID_API_CALL hid_send_output_report(hid_device* dev, const unsigned char* data, size_t length);
 
 		/** @brief Get a input report from a HID device.
 
@@ -619,4 +689,3 @@ extern "C" {
 #endif
 
 #endif
-

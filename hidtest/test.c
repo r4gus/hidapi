@@ -52,6 +52,23 @@
 #endif
 //
 
+const char *hid_bus_name(hid_bus_type bus_type) {
+	static const char *const HidBusTypeName[] = {
+		"Unknown",
+		"USB",
+		"Bluetooth",
+		"I2C",
+		"SPI",
+	};
+
+	if ((int)bus_type < 0)
+		bus_type = HID_API_BUS_UNKNOWN;
+	if ((int)bus_type >= (int)(sizeof(HidBusTypeName) / sizeof(HidBusTypeName[0])))
+		bus_type = HID_API_BUS_UNKNOWN;
+
+	return HidBusTypeName[bus_type];
+}
+
 void print_device(struct hid_device_info *cur_dev) {
 	printf("Device Found\n  type: %04hx %04hx\n  path: %s\n  serial_number: %ls", cur_dev->vendor_id, cur_dev->product_id, cur_dev->path, cur_dev->serial_number);
 	printf("\n");
@@ -60,7 +77,7 @@ void print_device(struct hid_device_info *cur_dev) {
 	printf("  Release:      %hx\n", cur_dev->release_number);
 	printf("  Interface:    %d\n",  cur_dev->interface_number);
 	printf("  Usage (page): 0x%hx (0x%hx)\n", cur_dev->usage, cur_dev->usage_page);
-	printf("  Bus type: %d\n", cur_dev->bus_type);
+	printf("  Bus type: %u (%s)\n", (unsigned)cur_dev->bus_type, hid_bus_name(cur_dev->bus_type));
 	printf("\n");
 }
 
@@ -69,7 +86,11 @@ void print_hid_report_descriptor_from_device(hid_device *device) {
 	int res = 0;
 
 	printf("  Report Descriptor: ");
+#if HID_API_VERSION >= HID_API_MAKE_VERSION(0, 14, 0)
 	res = hid_get_report_descriptor(device, descriptor, sizeof(descriptor));
+#else
+	(void)res;
+#endif
 	if (res < 0) {
 		printf("error getting: %ls", hid_error(device));
 	}
@@ -113,6 +134,23 @@ int main(int argc, char* argv[])
 {
 	(void)argc;
 	(void)argv;
+
+	/* --- HIDAPI R&D: this is just to force the compiler to ensure
+	       each of those functions are implemented (even as a stub)
+	       by each backend. --- */
+	(void)&hid_open;
+	(void)&hid_open_path;
+	(void)&hid_read_timeout;
+	(void)&hid_get_input_report;
+#if HID_API_VERSION >= HID_API_MAKE_VERSION(0, 15, 0)
+	(void)&hid_send_output_report;
+#endif
+	(void)&hid_get_feature_report;
+	(void)&hid_send_feature_report;
+#if HID_API_VERSION >= HID_API_MAKE_VERSION(0, 14, 0)
+	(void)&hid_get_report_descriptor;
+#endif
+	/* --- */
 
 	int res;
 	unsigned char buf[256];
@@ -160,6 +198,10 @@ int main(int argc, char* argv[])
  		return 1;
 	}
 
+#if defined(_WIN32) && HID_API_VERSION >= HID_API_MAKE_VERSION(0, 15, 0)
+	hid_winapi_set_write_timeout(handle, 5000);
+#endif
+
 	// Read the Manufacturer String
 	wstr[0] = 0x0000;
 	res = hid_get_manufacturer_string(handle, wstr, MAX_STR);
@@ -203,6 +245,13 @@ int main(int argc, char* argv[])
 	// Try to read from the device. There should be no
 	// data here, but execution should not block.
 	res = hid_read(handle, buf, 17);
+	if (res < 0) {
+#if HID_API_VERSION >= HID_API_MAKE_VERSION(0, 15, 0)
+		printf("Unable to read from device: %ls\n", hid_read_error(handle));
+#else
+		printf("Unable to read from device: %ls\n", hid_error(handle));
+#endif
+	}
 
 	// Send a Feature Report to the device
 	buf[0] = 0x2;
@@ -212,7 +261,7 @@ int main(int argc, char* argv[])
 	buf[4] = 0x00;
 	res = hid_send_feature_report(handle, buf, 17);
 	if (res < 0) {
-		printf("Unable to send a feature report.\n");
+		printf("Unable to send a feature report: %ls\n", hid_error(handle));
 	}
 
 	memset(buf,0,sizeof(buf));
