@@ -1,6 +1,7 @@
 .{
     .name = .hidapi,
-    .version = "0.15.0",
+    .version = "0.16.0",
+    .minimum_zig_version = "0.15.1",
     .fingerprint = 0x274758e14a01bde3,
     .dependencies = .{
     },
