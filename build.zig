@@ -27,9 +27,9 @@ pub fn build(b: *std.Build) void {
         lib_mod.linkSystemLibrary("pthread", .{});
     } else if (target.result.os.tag == .macos) {
         lib_mod.addCSourceFiles(.{ .files = &.{"mac/hid.c"}, .flags = &.{"-std=gnu11"} });
-        lib_mod.linkSystemLibrary("IOKit", .{});
-        lib_mod.linkSystemLibrary("CoreFoundation", .{});
-        lib_mod.linkSystemLibrary("AppKit", .{});
+        lib_mod.linkFramework("IOKit", .{});
+        lib_mod.linkFramework("CoreFoundation", .{});
+        lib_mod.linkFramework("AppKit", .{});
         lib_mod.linkSystemLibrary("pthread", .{});
     } else if (target.result.os.tag == .windows) {
         lib_mod.addCSourceFiles(.{ .files = &.{"windows/hid.c"}, .flags = &.{"-std=gnu11"} });
@@ -47,6 +47,9 @@ pub fn build(b: *std.Build) void {
 
     lib.linkLibC();
     lib.installHeader(b.path("hidapi/hidapi.h"), "hidapi.h");
+    if (target.result.os.tag == .macos) {
+        lib.installHeader(b.path("mac/hidapi_darwin.h"), "hidapi_darwin.h");
+    }
 
     b.installArtifact(lib);
 }
