@@ -1,11 +1,6 @@
 ## HIDAPI library for Windows, Linux, FreeBSD and macOS
 
-| CI instance          | Status |
-|----------------------|--------|
-| `Linux/macOS/Windows (master)` | [![GitHub Builds](https://github.com/libusb/hidapi/actions/workflows/builds.yml/badge.svg?branch=master)](https://github.com/libusb/hidapi/actions/workflows/builds.yml?query=branch%3Amaster) |
-| `Windows (master)` | [![Build status](https://ci.appveyor.com/api/projects/status/xfmr5fo8w0re8ded/branch/master?svg=true)](https://ci.appveyor.com/project/libusb/hidapi/branch/master) |
-| `BSD, last build (branch/PR)` | [![builds.sr.ht status](https://builds.sr.ht/~z3ntu/hidapi.svg)](https://builds.sr.ht/~z3ntu/hidapi) |
-| `Coverity Scan (last)` | [![Coverity Scan](https://scan.coverity.com/projects/583/badge.svg)](https://scan.coverity.com/projects/hidapi) |
+This is a fork of the original [libusb/hidapi](https://github.com/libusb/hidapi) repo with a [Zig](https://ziglang.org/) build script.
 
 HIDAPI is a multi-platform library which allows an application to interface
 with USB and Bluetooth HID-Class devices on Windows, Linux, FreeBSD, and macOS.
@@ -170,6 +165,39 @@ int main(int argc, char* argv[])
 You can also use [hidtest/test.c](hidtest/test.c)
 as a starting point for your applications.
 
+## Use it with Zig
+
+First add this library as a dependency to your build.zig.zon file:
+
+```
+# Replace <VERSION TAG> with the version you want to use
+zig fetch --save https://github.com/r4gus/zbor/archive/refs/tags/<VERSION TAG>.tar.gz
+
+# e.g. zig fetch --save https://github.com/r4gus/zbor/archive/refs/tags/0.16.1.tar.gz
+```
+
+Then add the following to your `build.zig´:
+
+```zig
+// First access the hidapi dependency
+const hidapi_dep = b.dependency("hidapi", .{
+    .target = target,
+    .optimize = optimize,
+});
+
+// Then link the hidapi lib to your exe, lib or mod, e.g.:
+my_mod.linkLibrary(hidapi_dep.artifact("hidapi"));
+```
+
+Finally, import `hidapi` within you code.
+
+```zig
+const hidapi = @cImport({
+    @cInclude("hidapi.h");
+});
+```
+
+The `hidapi` constant will expose the usual hidapi interface.
 
 ## License
 
